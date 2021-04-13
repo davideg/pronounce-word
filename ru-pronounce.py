@@ -12,19 +12,8 @@ FORVO_URL = 'https://forvo.com/word/{ru_word}/#ru'
 AUDIO_URL = 'https://audio00.forvo.com/audios/mp3/{path}'
 FIND_ENCODED_AUDIO_ARGS_RE = 'Play\((\d+,[^)]*)'
 FALLBACK_AUDIO_URL = 'https://audio00.forvo.com/mp3/{path}'
-# Play(id, path_mp3, path_ogg, true, path_audio_mp3, path_audio_ogg, quality);
-# Play(3710636,'OTUxNDEzNi8xMzgvOTUxNDEzNl8xMzhfNzM2MTE3Lm1wMw==','OTUxNDEzNi8xMzgvOTUxNDEzNl8xMzhfNzM2MTE3Lm9nZw==',false,'Zy9qL2dqXzk1MTQxMzZfMTM4XzczNjExNy5tcDM=','Zy9qL2dqXzk1MTQxMzZfMTM4XzczNjExNy5vZ2c=','h');return false;
-# https://audio00.forvo.com/audios/mp3/0/9/09_8983396_138_736117_1.mp3
-# https://audio00.forvo.com/audios/mp3/g/j/gj_9514136_138_736117.mp3
-# 9514136/138/9514136_138_736117.mp3
-# 9514136/138/9514136_138_736117.ogg
-# g/j/gj_9514136_138_736117.mp3
-# g/j/gj_9514136_138_736117.ogg
-
-# Intermediate
-# https://audio00.forvo.com/mp3/9514136/138/9514136_138_736117.mp3
-
 USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36'
+
 
 def _setup_logging(log_level):
     logging.basicConfig(
