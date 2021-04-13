@@ -10,8 +10,7 @@ PLAY_SOUND_CMD = 'afplay "{file}"'
 SOUND_FILE_EXT = '.mp3'
 FORVO_URL = 'https://forvo.com/word/{ru_word}/#ru'
 AUDIO_URL = 'https://audio00.forvo.com/audios/mp3/{path}'
-FIND_ENCODED_AUDIO_RE = 'Play\((?:[^,]*,){4}\'([^\']*)\''
-FALLBACK_FIND_ENCODED_AUDIO_RE = 'Play\((?:[^,]*,)\'([^\']*)\''
+FIND_ENCODED_AUDIO_ARGS_RE = 'Play\((\d+,[^)]*)'
 FALLBACK_AUDIO_URL = 'https://audio00.forvo.com/mp3/{path}'
 # Play(id, path_mp3, path_ogg, true, path_audio_mp3, path_audio_ogg, quality);
 # Play(3710636,'OTUxNDEzNi8xMzgvOTUxNDEzNl8xMzhfNzM2MTE3Lm1wMw==','OTUxNDEzNi8xMzgvOTUxNDEzNl8xMzhfNzM2MTE3Lm9nZw==',false,'Zy9qL2dqXzk1MTQxMzZfMTM4XzczNjExNy5tcDM=','Zy9qL2dqXzk1MTQxMzZfMTM4XzczNjExNy5vZ2c=','h');return false;
@@ -56,24 +55,24 @@ def play(filepath):
 def download(ru_word, dirpath):
     filepath_template = os.path.join(FILE_CACHE, ru_word + '{suffix}' + SOUND_FILE_EXT)
     audio_urls = []
-    audio_url_template = AUDIO_URL
     headers = {
-            'User-Agent': USER_AGENT
-            }
+        'User-Agent': USER_AGENT
+    }
     r = requests.get(FORVO_URL.format(ru_word=ru_word), headers=headers)
     if r.status_code == 200:
-        matches = re.findall(FIND_ENCODED_AUDIO_RE, r.text)
-        logging.debug(f'Found following encoded strings: {matches}')
-        if '' in matches:
-            logging.debug('Trying different encoded strings')
-            matches = re.findall(FALLBACK_FIND_ENCODED_AUDIO_RE, r.text)
-            logging.debug(f'Found following encoded strings: {matches}')
-            audio_url_template = FALLBACK_AUDIO_URL
-        converted_matches = [base64.b64decode(match).decode('utf-8')
-                             for match in matches if match != '']
-        audio_urls = [audio_url_template.format(path=match) for match in converted_matches]
-        logging.debug(f'Found {len(audio_urls)} audio file URLs: '
-                      f'{", ".join(audio_urls)}')
+        matches = re.findall(FIND_ENCODED_AUDIO_ARGS_RE, r.text)
+        for match in matches:
+            # each match is an arguments list to a function.
+            args_list = [arg.strip('\'') for arg in match.split(',')]
+            if args_list and args_list[4] != '':
+                converted_match = base64.b64decode(args_list[4]).decode('utf-8')
+                audio_url = AUDIO_URL.format(path=converted_match)
+                audio_urls.append(audio_url)
+            elif args_list and args_list[1] != '':
+                converted_match = base64.b64decode(args_list[1]).decode('utf-8')
+                audio_url = FALLBACK_AUDIO_URL.format(path=converted_match)
+                audio_urls.append(audio_url)
+
     for i, url in enumerate(audio_urls):
         logging.debug(f'Downloading {url}...')
         r = requests.get(url, headers=headers)
