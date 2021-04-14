@@ -4,11 +4,12 @@ import logging
 import os
 import re
 import requests
+import json
 
 FILE_CACHE = os.path.expanduser('~/.ru-pronounce/cache/')
+WORD_DATA_FILE = os.path.expanduser('~/.ru-pronounce/word-data.json')
 PLAY_SOUND_CMD = 'afplay "{file}"'
 SOUND_FILE_EXT = '.mp3'
-FILEPATH_TEMPLATE = os.path.join(FILE_CACHE, '{word}' + '{suffix}' + SOUND_FILE_EXT)
 FORVO_URL = 'https://forvo.com/word/{ru_word}/#ru'
 AUDIO_URL = 'https://audio00.forvo.com/audios/mp3/{path}'
 FIND_ENCODED_AUDIO_ARGS_RE = 'Play\((\d+,[^)]*)'
@@ -25,61 +26,154 @@ def _setup_file_cache():
     if not os.path.isdir(FILE_CACHE):
         os.makedirs(FILE_CACHE, exist_ok=True)
 
-def download_if_not_available(ru_word):
-    filepath = _get_word_filepath(ru_word)
-    if not os.path.isfile(filepath):
-        logging.info(f'File {soundfile} not cached. Downloading...')
-        download(ru_word)
+class PronounceWord:
 
-def _get_word_filepath(ru_word, index=0):
-    suffix = '' if index == 0 else f'_{index}'
-    return FILEPATH_TEMPLATE.format(word=ru_word, suffix=suffix)
+    def __init__(self,
+            file_cache_dir=FILE_CACHE,
+            word_data_file=WORD_DATA_FILE,
+            ):
+        self.file_cache_dir = file_cache_dir
+        self.word_data_file = word_data_file
+        self._filepath_template = os.path.join(file_cache_dir,
+                '{word}'
+                + '{suffix}'
+                + SOUND_FILE_EXT)
 
-def pronounce(ru_word, pronunciation_index=0):
-    filepath = _get_word_filepath(ru_word, pronunciation_index)
-    if os.path.isfile(filepath):
-        play(filepath)
-    else:
-        logging.error(f'File {filepath} does not exist')
+        # word data format:
+        # {'<word>':
+        #   {
+        #       'num_pronounciations': '<num>',
+        #       'cycle_index': '<num>',
+        #       'speaker_sex': 'm' | 'f',
+        #       'speaker_location': '<str>',
+        #       'disabled': True | False,
+        #   },...
+        # }
+        self._word_data = {}
 
-def play(filepath):
-    if os.path.isfile(filepath):
-        logging.debug(f'Playing file {filepath}')
-        os.system(PLAY_SOUND_CMD.format(file=filepath))
-    else:
-        logging.error(f'Could not find {filepath}')
+    def setup(self, rebuild_metadata=False, override=False):
+        self.load_word_data()
+        if rebuild_metadata:
+            self._rebuild_word_data(override=override)
+    
+    def teardown(self):
+        self.save_word_data()
 
-def download(ru_word):
-    audio_urls = []
-    headers = {
-        'User-Agent': USER_AGENT
-    }
-    r = requests.get(FORVO_URL.format(ru_word=ru_word), headers=headers)
-    if r.status_code == 200:
-        matches = re.findall(FIND_ENCODED_AUDIO_ARGS_RE, r.text)
-        for match in matches:
-            # each match is an arguments list to a function.
-            args_list = [arg.strip('\'') for arg in match.split(',')]
-            if args_list and args_list[4] != '':
-                converted_match = base64.b64decode(args_list[4]).decode('utf-8')
-                audio_url = AUDIO_URL.format(path=converted_match)
-                audio_urls.append(audio_url)
-            elif args_list and args_list[1] != '':
-                converted_match = base64.b64decode(args_list[1]).decode('utf-8')
-                audio_url = FALLBACK_AUDIO_URL.format(path=converted_match)
-                audio_urls.append(audio_url)
+    def download_if_not_available(self, ru_word):
+        filepath = self._get_word_filepath(ru_word)
+        if not os.path.isfile(filepath):
+            logging.info(f'File {filepath} not cached. Downloading...')
+            self.download(ru_word)
 
-    for i, url in enumerate(audio_urls):
-        logging.debug(f'Downloading {url}...')
-        r = requests.get(url, headers=headers)
-        if r.status_code == 200:
-            filepath = _get_word_filepath(ru_word, i)
-            logging.debug(f'Download successful. Saving to {filepath}')
-            with open(filepath, 'wb') as fd:
-                fd.write(r.content)
+    def _rebuild_word_data(self, override=False):
+        get_word_re = '([^_\d\.]*)(?:_\d+)?\.mp3'
+        word_counts = {}
+        for filename in os.listdir(self.file_cache_dir):
+            match = re.match(get_word_re, filename)
+            if match is not None:
+                word = match.group(1)
+                if word not in self._word_data or override:
+                    if word in word_counts:
+                        word_counts[word] += 1
+                    else:
+                        word_counts[word] = 1
+        for word, count in word_counts.items():
+            if word not in self._word_data or override:
+                self._initialize_word_metadata(word, override)
+                self._word_data[word]['num_pronounciations'] = count
+
+    def save_word_data(self):
+        with open(self.word_data_file, 'w') as fd:
+            json.dump(self._word_data, fd)
+
+    def load_word_data(self):
+        if os.path.isfile(self.word_data_file):
+            with open(self.word_data_file, 'r') as fd:
+                self._word_data = json.load(fd)
         else:
-            logging.error(f'Problem downloading {url}!'
-                          f' Status code: {r.status_code}')
+            logging.error('Could not load word data.'
+                    f' File {self.word_data_file} does not exist.')
+
+    def _get_word_filepath(self, ru_word, index=0):
+        suffix = '' if index == 0 else f'_{index}'
+        return self._filepath_template.format(word=ru_word, suffix=suffix)
+
+    def cycle_pronounciations(self, ru_word, num_to_cycle=-1):
+        num_pronounciations = self._word_data[ru_word]['num_pronounciations']
+        cycle_index = self._word_data[ru_word]['cycle_index']
+        if num_to_cycle > 0:
+            num_to_cycle = min(num_pronounciations, num_to_cycle)
+        else:
+            num_to_cycle = num_pronounciations
+        # if we're given a smaller number to cycle through start the cycle over
+        if cycle_index > (num_to_cycle - 1):
+            cycle_index = 0
+        self.pronounce(ru_word, cycle_index)
+        self._word_data[ru_word]['cycle_index'] = (cycle_index + 1) % num_to_cycle
+
+    def pronounce(self, ru_word, pronunciation_index=0):
+        filepath = self._get_word_filepath(ru_word, pronunciation_index)
+        if os.path.isfile(filepath):
+            self.play(filepath)
+        else:
+            logging.error(f'File {filepath} does not exist')
+
+    def play(self, filepath):
+        if os.path.isfile(filepath):
+            logging.debug(f'Playing file {filepath}')
+            os.system(PLAY_SOUND_CMD.format(file=filepath))
+        else:
+            logging.error(f'Could not find {filepath}')
+
+    def _initialize_word_metadata(self, ru_word, override=False):
+        if ru_word not in self._word_data or override:
+            word_metadata = {
+                    'num_pronounciations': 0,
+                    'cycle_index': 0,
+                    'speaker_sex': None,
+                    'speaker_location': None,
+                    'disabled': False
+                    }
+            self._word_data[ru_word] = word_metadata
+
+    def download(self, ru_word):
+        self._initialize_word_metadata(ru_word)
+        audio_urls = []
+        headers = {
+            'User-Agent': USER_AGENT
+        }
+        r = requests.get(FORVO_URL.format(ru_word=ru_word), headers=headers)
+        if r.status_code == 200:
+            matches = re.findall(FIND_ENCODED_AUDIO_ARGS_RE, r.text)
+            for match in matches:
+                # each match is an arguments list to a function.
+                args_list = [arg.strip('\'') for arg in match.split(',')]
+                if args_list and args_list[4] != '':
+                    converted_match = base64.b64decode(args_list[4]).decode('utf-8')
+                    audio_url = AUDIO_URL.format(path=converted_match)
+                    audio_urls.append(audio_url)
+                elif args_list and args_list[1] != '':
+                    converted_match = base64.b64decode(args_list[1]).decode('utf-8')
+                    audio_url = FALLBACK_AUDIO_URL.format(path=converted_match)
+                    audio_urls.append(audio_url)
+        else:
+            logging.error(f'Could not find pronounciations for {ru_word}')
+
+        successful_dls = 0
+        for i, url in enumerate(audio_urls):
+            logging.debug(f'Downloading {url}...')
+            r = requests.get(url, headers=headers)
+            if r.status_code == 200:
+                filepath = self._get_word_filepath(ru_word, i)
+                logging.debug(f'Download successful. Saving to {filepath}')
+                with open(filepath, 'wb') as fd:
+                    fd.write(r.content)
+                successful_dls += 1
+            else:
+                logging.error(f'Problem downloading {url}!'
+                              f' Status code: {r.status_code}')
+        self._word_data[ru_word]['num_pronounciations'] = successful_dls
+        #TODO extract metadata about speaker sex and location
 
 
 if __name__ == '__main__':
@@ -107,6 +201,7 @@ if __name__ == '__main__':
             '-n',
             '--play-n',
             type=int,
+            default=0,
             help='play the nth available word pronounciation' \
             ' where n is the integer provided to this option'
             )
@@ -116,12 +211,37 @@ if __name__ == '__main__':
             action='store_true',
             help='play a random available word pronounciation'
             )
-
+    metadata_group = parser.add_argument_group('metadata')
+    metadata_group.add_argument(
+            '--rebuild-metadata',
+            action='store_true',
+            help='rebuilds word metadata from cached audio files'
+            )
+    metadata_group.add_argument(
+            '--override',
+            action='store_true',
+            help='overrides existing word metadata when rebuilding metadata'
+            )
     args = parser.parse_args()
+    print(args)
+    if args.override and not args.rebuild_metadata:
+        parser.error('--rebuild-metadata must be used when specifying --override')
     log_level = logging.INFO
     if args.debug:
         log_level = logging.DEBUG
     _setup_logging(log_level)
     _setup_file_cache()
-    download_if_not_available(args.ru_word)
-    pronounce(args.ru_word, pronunciation_index=args.play_n)
+    pronouncer = PronounceWord(
+            file_cache_dir=FILE_CACHE,
+            word_data_file=WORD_DATA_FILE)
+    pronouncer.setup(rebuild_metadata=args.rebuild_metadata,
+            override=args.override)
+    pronouncer.download_if_not_available(args.ru_word)
+    if args.cycle is not None:
+        # cycle pronounciations
+        pronouncer.cycle_pronounciations(args.ru_word, num_to_cycle=args.cycle)
+    elif args.random:
+        pronouncer.play_random_pronounciation(args.ru_word)
+    else:
+        pronouncer.pronounce(args.ru_word, pronunciation_index=args.play_n)
+    pronouncer.teardown()
