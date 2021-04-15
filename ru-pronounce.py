@@ -15,6 +15,7 @@ AUDIO_URL = 'https://audio00.forvo.com/audios/mp3/{path}'
 FIND_ENCODED_AUDIO_ARGS_RE = 'Play\((\d+,[^)]*)'
 FALLBACK_AUDIO_URL = 'https://audio00.forvo.com/mp3/{path}'
 USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36'
+MAX_FILES_PER_WORD = 20
 
 
 def _setup_logging(log_level):
@@ -172,6 +173,8 @@ class PronounceWord:
             else:
                 logging.error(f'Problem downloading {url}!'
                               f' Status code: {r.status_code}')
+            if i + 1 >= MAX_FILES_PER_WORD:
+                break
         self._word_data[ru_word]['num_pronounciations'] = successful_dls
         #TODO extract metadata about speaker sex and location
 
@@ -223,7 +226,6 @@ if __name__ == '__main__':
             help='overrides existing word metadata when rebuilding metadata'
             )
     args = parser.parse_args()
-    print(args)
     if args.override and not args.rebuild_metadata:
         parser.error('--rebuild-metadata must be used when specifying --override')
     log_level = logging.INFO
