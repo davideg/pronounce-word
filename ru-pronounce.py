@@ -5,6 +5,7 @@ import os
 import re
 import requests
 import json
+import concurrent.futures
 
 FILE_CACHE = os.path.expanduser('~/.ru-pronounce/cache/')
 WORD_DATA_FILE = os.path.expanduser('~/.ru-pronounce/word-data.json')
@@ -60,11 +61,11 @@ class PronounceWord:
     def teardown(self):
         self.save_word_data()
 
-    def download_if_not_available(self, ru_word):
+    def download_if_not_available(self, ru_word, use_threads=True):
         filepath = self._get_word_filepath(ru_word)
         if not os.path.isfile(filepath):
             logging.info(f'File {filepath} not cached. Downloading...')
-            self.download(ru_word)
+            self.download(ru_word, use_threads)
 
     def _rebuild_word_data(self, override=False):
         get_word_re = '([^_\d\.]*)(?:_\d+)?\.mp3'
@@ -137,7 +138,21 @@ class PronounceWord:
                     }
             self._word_data[ru_word] = word_metadata
 
-    def download(self, ru_word):
+    def _download_file(self, ru_word, index, url, headers):
+        logging.debug(f'Downloading {url}...')
+        r = requests.get(url, headers=headers)
+        if r.status_code == 200:
+            filepath = self._get_word_filepath(ru_word, index)
+            logging.debug(f'Download successful. Saving to {filepath}')
+            with open(filepath, 'wb') as fd:
+                fd.write(r.content)
+            return True
+        else:
+            logging.error(f'Problem downloading {url}!'
+                          f' Status code: {r.status_code}')
+            return False
+
+    def download(self, ru_word, use_threads=True):
         self._initialize_word_metadata(ru_word)
         audio_urls = []
         headers = {
@@ -160,21 +175,24 @@ class PronounceWord:
         else:
             logging.error(f'Could not find pronounciations for {ru_word}')
 
-        successful_dls = 0
-        for i, url in enumerate(audio_urls):
-            logging.debug(f'Downloading {url}...')
-            r = requests.get(url, headers=headers)
-            if r.status_code == 200:
-                filepath = self._get_word_filepath(ru_word, i)
-                logging.debug(f'Download successful. Saving to {filepath}')
-                with open(filepath, 'wb') as fd:
-                    fd.write(r.content)
-                successful_dls += 1
-            else:
-                logging.error(f'Problem downloading {url}!'
-                              f' Status code: {r.status_code}')
-            if i + 1 >= MAX_FILES_PER_WORD:
-                break
+        if use_threads:
+            # Download files with a threadpool
+            num_to_download = min(len(audio_urls), MAX_FILES_PER_WORD)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_to_download) as executor:
+                futures = [executor.submit(self._download_file, ru_word, i, url, headers)
+                        for i, url in enumerate(audio_urls[:num_to_download])]
+                results = [f.result() for f in futures]
+
+            successful_dls = sum(results)
+        else:
+            successful_dls = 0
+            for i, url in enumerate(audio_urls):
+                success = self._download_file(ru_word, i, url, headers)
+                if success:
+                    successful_dls += 1
+                if i + 1 >= MAX_FILES_PER_WORD:
+                    break
+
         self._word_data[ru_word]['num_pronounciations'] = successful_dls
         #TODO extract metadata about speaker sex and location
 
@@ -214,6 +232,11 @@ if __name__ == '__main__':
             action='store_true',
             help='play a random available word pronounciation'
             )
+    parser.add_argument(
+            '--disable-threading',
+            action='store_true',
+            help='skips using threads when downloading files'
+            )
     metadata_group = parser.add_argument_group('metadata')
     metadata_group.add_argument(
             '--rebuild-metadata',
@@ -238,12 +261,14 @@ if __name__ == '__main__':
             word_data_file=WORD_DATA_FILE)
     pronouncer.setup(rebuild_metadata=args.rebuild_metadata,
             override=args.override)
-    pronouncer.download_if_not_available(args.ru_word)
+    use_threads = not args.disable_threading
+    ru_word = args.ru_word.strip()
+    pronouncer.download_if_not_available(ru_word, use_threads=use_threads)
     if args.cycle is not None:
         # cycle pronounciations
-        pronouncer.cycle_pronounciations(args.ru_word, num_to_cycle=args.cycle)
+        pronouncer.cycle_pronounciations(ru_word, num_to_cycle=args.cycle)
     elif args.random:
-        pronouncer.play_random_pronounciation(args.ru_word)
+        pronouncer.play_random_pronounciation(ru_word)
     else:
-        pronouncer.pronounce(args.ru_word, pronunciation_index=args.play_n)
+        pronouncer.pronounce(ru_word, pronunciation_index=args.play_n)
     pronouncer.teardown()
