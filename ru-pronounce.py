@@ -6,6 +6,7 @@ import re
 import requests
 import json
 import concurrent.futures
+import sys
 
 FILE_CACHE = os.path.expanduser('~/.ru-pronounce/cache/')
 WORD_DATA_FILE = os.path.expanduser('~/.ru-pronounce/word-data.json')
@@ -66,8 +67,13 @@ class PronounceWord:
         if not os.path.isfile(filepath):
             logging.info(f'File {filepath} not cached. Downloading...')
             self.download(ru_word, use_threads)
+        else:
+            logging.debug(f'Found existing {filepath}')
 
     def _rebuild_word_data(self, override=False):
+        if override:
+            # clear metadata if we're going to override it from the filesystem
+            self._word_data = {}
         get_word_re = '([^_\d\.]*)(?:_\d+)?\.mp3'
         word_counts = {}
         for filename in os.listdir(self.file_cache_dir):
@@ -93,7 +99,7 @@ class PronounceWord:
             with open(self.word_data_file, 'r') as fd:
                 self._word_data = json.load(fd)
         else:
-            logging.error('Could not load word data.'
+            logging.warning('Could not load word data.'
                     f' File {self.word_data_file} does not exist.')
 
     def _get_word_filepath(self, ru_word, index=0):
@@ -115,17 +121,14 @@ class PronounceWord:
 
     def pronounce(self, ru_word, pronunciation_index=0):
         filepath = self._get_word_filepath(ru_word, pronunciation_index)
-        if os.path.isfile(filepath):
-            self.play(filepath)
-        else:
-            logging.error(f'File {filepath} does not exist')
+        self.play(filepath)
 
     def play(self, filepath):
         if os.path.isfile(filepath):
             logging.debug(f'Playing file {filepath}')
             os.system(PLAY_SOUND_CMD.format(file=filepath))
         else:
-            logging.error(f'Could not find {filepath}')
+            logging.error(f'File {filepath} does not exist')
 
     def _initialize_word_metadata(self, ru_word, override=False):
         if ru_word not in self._word_data or override:
@@ -138,6 +141,10 @@ class PronounceWord:
                     }
             self._word_data[ru_word] = word_metadata
 
+    def _clear_word_metadata(self, ru_word):
+        if ru_word in self._word_data:
+            del self._word_data[ru_word]
+
     def _download_file(self, ru_word, index, url, headers):
         logging.debug(f'Downloading {url}...')
         r = requests.get(url, headers=headers)
@@ -148,7 +155,7 @@ class PronounceWord:
                 fd.write(r.content)
             return True
         else:
-            logging.error(f'Problem downloading {url}!'
+            logging.warning(f'Problem downloading {url}!'
                           f' Status code: {r.status_code}')
             return False
 
@@ -174,6 +181,10 @@ class PronounceWord:
                     audio_urls.append(audio_url)
         else:
             logging.error(f'Could not find pronounciations for {ru_word}')
+            logging.debug(f'Clearing word metadata for {ru_word}')
+            self._clear_word_metadata(ru_word)
+            # this means the word could not be found, so let's exit
+            sys.exit(1)
 
         if use_threads:
             # Download files with a threadpool
@@ -262,7 +273,7 @@ if __name__ == '__main__':
     pronouncer.setup(rebuild_metadata=args.rebuild_metadata,
             override=args.override)
     use_threads = not args.disable_threading
-    ru_word = args.ru_word.strip()
+    ru_word = args.ru_word.strip().lower()
     pronouncer.download_if_not_available(ru_word, use_threads=use_threads)
     if args.cycle is not None:
         # cycle pronounciations
