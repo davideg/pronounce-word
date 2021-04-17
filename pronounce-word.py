@@ -343,7 +343,7 @@ if __name__ == '__main__':
             type=int,
             default=0,
             help='play the nth available word pronounciation' \
-            ' where n is the integer provided to this option'
+            ' (indexed beginning with 0) where n is the integer provided to this option'
             )
     group.add_argument(
             '-r',
