@@ -8,11 +8,11 @@ import json
 import concurrent.futures
 import sys
 
-FILE_CACHE = os.path.expanduser('~/.ru-pronounce/cache/')
-WORD_DATA_FILE = os.path.expanduser('~/.ru-pronounce/word-data.json')
+FILE_CACHE = os.path.expanduser('~/.pronounce-word/cache/')
+WORD_DATA_FILE = os.path.expanduser('~/.pronounce-word/word-data.json')
 PLAY_SOUND_CMD = 'afplay "{file}"'
 SOUND_FILE_EXT = '.mp3'
-FORVO_URL = 'https://forvo.com/word/{ru_word}/#ru'
+FORVO_URL = 'https://forvo.com/word/{word}/'
 AUDIO_URL = 'https://audio00.forvo.com/audios/mp3/{path}'
 FIND_ENCODED_AUDIO_ARGS_RE = 'Play\((\d+,[^)]*)'
 FALLBACK_AUDIO_URL = 'https://audio00.forvo.com/mp3/{path}'
@@ -62,11 +62,11 @@ class PronounceWord:
     def teardown(self):
         self.save_word_data()
 
-    def download_if_not_available(self, ru_word, use_threads=True):
-        filepath = self._get_word_filepath(ru_word)
+    def download_if_not_available(self, word, use_threads=True):
+        filepath = self._get_word_filepath(word)
         if not os.path.isfile(filepath):
             logging.info(f'File {filepath} not cached. Downloading...')
-            self.download(ru_word, use_threads)
+            self.download(word, use_threads)
         else:
             logging.debug(f'Found existing {filepath}')
 
@@ -102,13 +102,13 @@ class PronounceWord:
             logging.warning('Could not load word data.'
                     f' File {self.word_data_file} does not exist.')
 
-    def _get_word_filepath(self, ru_word, index=0):
+    def _get_word_filepath(self, word, index=0):
         suffix = '' if index == 0 else f'_{index}'
-        return self._filepath_template.format(word=ru_word, suffix=suffix)
+        return self._filepath_template.format(word=word, suffix=suffix)
 
-    def cycle_pronounciations(self, ru_word, num_to_cycle=-1):
-        num_pronounciations = self._word_data[ru_word]['num_pronounciations']
-        cycle_index = self._word_data[ru_word]['cycle_index']
+    def cycle_pronounciations(self, word, num_to_cycle=-1):
+        num_pronounciations = self._word_data[word]['num_pronounciations']
+        cycle_index = self._word_data[word]['cycle_index']
         if num_to_cycle > 0:
             num_to_cycle = min(num_pronounciations, num_to_cycle)
         else:
@@ -116,11 +116,11 @@ class PronounceWord:
         # if we're given a smaller number to cycle through start the cycle over
         if cycle_index > (num_to_cycle - 1):
             cycle_index = 0
-        self.pronounce(ru_word, cycle_index)
-        self._word_data[ru_word]['cycle_index'] = (cycle_index + 1) % num_to_cycle
+        self.pronounce(word, cycle_index)
+        self._word_data[word]['cycle_index'] = (cycle_index + 1) % num_to_cycle
 
-    def pronounce(self, ru_word, pronunciation_index=0):
-        filepath = self._get_word_filepath(ru_word, pronunciation_index)
+    def pronounce(self, word, pronunciation_index=0):
+        filepath = self._get_word_filepath(word, pronunciation_index)
         self.play(filepath)
 
     def play(self, filepath):
@@ -130,8 +130,8 @@ class PronounceWord:
         else:
             logging.error(f'File {filepath} does not exist')
 
-    def _initialize_word_metadata(self, ru_word, override=False):
-        if ru_word not in self._word_data or override:
+    def _initialize_word_metadata(self, word, override=False):
+        if word not in self._word_data or override:
             word_metadata = {
                     'num_pronounciations': 0,
                     'cycle_index': 0,
@@ -139,17 +139,17 @@ class PronounceWord:
                     'speaker_location': None,
                     'disabled': False
                     }
-            self._word_data[ru_word] = word_metadata
+            self._word_data[word] = word_metadata
 
-    def _clear_word_metadata(self, ru_word):
-        if ru_word in self._word_data:
-            del self._word_data[ru_word]
+    def _clear_word_metadata(self, word):
+        if word in self._word_data:
+            del self._word_data[word]
 
-    def _download_file(self, ru_word, index, url, headers):
+    def _download_file(self, word, index, url, headers):
         logging.debug(f'Downloading {url}...')
         r = requests.get(url, headers=headers)
         if r.status_code == 200:
-            filepath = self._get_word_filepath(ru_word, index)
+            filepath = self._get_word_filepath(word, index)
             logging.debug(f'Download successful. Saving to {filepath}')
             with open(filepath, 'wb') as fd:
                 fd.write(r.content)
@@ -159,13 +159,13 @@ class PronounceWord:
                           f' Status code: {r.status_code}')
             return False
 
-    def download(self, ru_word, use_threads=True):
-        self._initialize_word_metadata(ru_word)
+    def download(self, word, use_threads=True):
+        self._initialize_word_metadata(word)
         audio_urls = []
         headers = {
             'User-Agent': USER_AGENT
         }
-        r = requests.get(FORVO_URL.format(ru_word=ru_word), headers=headers)
+        r = requests.get(FORVO_URL.format(word=word), headers=headers)
         if r.status_code == 200:
             matches = re.findall(FIND_ENCODED_AUDIO_ARGS_RE, r.text)
             for match in matches:
@@ -180,9 +180,9 @@ class PronounceWord:
                     audio_url = FALLBACK_AUDIO_URL.format(path=converted_match)
                     audio_urls.append(audio_url)
         else:
-            logging.error(f'Could not find pronounciations for {ru_word}')
-            logging.debug(f'Clearing word metadata for {ru_word}')
-            self._clear_word_metadata(ru_word)
+            logging.error(f'Could not find pronounciations for {word}')
+            logging.debug(f'Clearing word metadata for {word}')
+            self._clear_word_metadata(word)
             # this means the word could not be found, so let's exit
             sys.exit(1)
 
@@ -190,7 +190,7 @@ class PronounceWord:
             # Download files with a threadpool
             num_to_download = min(len(audio_urls), MAX_FILES_PER_WORD)
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_to_download) as executor:
-                futures = [executor.submit(self._download_file, ru_word, i, url, headers)
+                futures = [executor.submit(self._download_file, word, i, url, headers)
                         for i, url in enumerate(audio_urls[:num_to_download])]
                 results = [f.result() for f in futures]
 
@@ -198,19 +198,19 @@ class PronounceWord:
         else:
             successful_dls = 0
             for i, url in enumerate(audio_urls):
-                success = self._download_file(ru_word, i, url, headers)
+                success = self._download_file(word, i, url, headers)
                 if success:
                     successful_dls += 1
                 if i + 1 >= MAX_FILES_PER_WORD:
                     break
 
-        self._word_data[ru_word]['num_pronounciations'] = successful_dls
+        self._word_data[word]['num_pronounciations'] = successful_dls
         #TODO extract metadata about speaker sex and location
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('ru_word')
+    parser.add_argument('word')
     parser.add_argument(
             '-d',
             '--debug',
@@ -273,13 +273,13 @@ if __name__ == '__main__':
     pronouncer.setup(rebuild_metadata=args.rebuild_metadata,
             override=args.override)
     use_threads = not args.disable_threading
-    ru_word = args.ru_word.strip().lower()
-    pronouncer.download_if_not_available(ru_word, use_threads=use_threads)
+    word = args.word.strip().lower()
+    pronouncer.download_if_not_available(word, use_threads=use_threads)
     if args.cycle is not None:
         # cycle pronounciations
-        pronouncer.cycle_pronounciations(ru_word, num_to_cycle=args.cycle)
+        pronouncer.cycle_pronounciations(word, num_to_cycle=args.cycle)
     elif args.random:
-        pronouncer.play_random_pronounciation(ru_word)
+        pronouncer.play_random_pronounciation(word)
     else:
-        pronouncer.pronounce(ru_word, pronunciation_index=args.play_n)
+        pronouncer.pronounce(word, pronunciation_index=args.play_n)
     pronouncer.teardown()
