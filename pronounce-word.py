@@ -159,8 +159,7 @@ class PronounceWord:
                           f' Status code: {r.status_code}')
             return False
 
-    def download(self, word, use_threads=True):
-        self._initialize_word_metadata(word)
+    def _fetch_audio_urls(self, word):
         audio_urls = []
         headers = {
             'User-Agent': USER_AGENT
@@ -179,8 +178,15 @@ class PronounceWord:
                     converted_match = base64.b64decode(args_list[1]).decode('utf-8')
                     audio_url = FALLBACK_AUDIO_URL.format(path=converted_match)
                     audio_urls.append(audio_url)
+            return audio_urls
         else:
             logging.error(f'Could not find pronounciations for {word}')
+            return None
+
+    def download(self, word, use_threads=True):
+        self._initialize_word_metadata(word)
+        audio_urls = self._fetch_audio_urls(word)
+        if audio_urls is None:
             logging.debug(f'Clearing word metadata for {word}')
             self._clear_word_metadata(word)
             # this means the word could not be found, so let's exit
